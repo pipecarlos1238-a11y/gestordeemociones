@@ -1,0 +1,18 @@
+{
+  "timestamp": "20261008_200635",
+  "total": 5,
+  "features": [
+    "ancho_norm",
+    "mar_externo",
+    "mar_interno",
+    "curva_sonrisa",
+    "tension_labial"
+  ],
+  "labels": {
+    "0": "Neutro",
+    "1": "Felicidad",
+    "2": "Tristeza",
+    "3": "Enojo",
+    "4": "Sorpresa"
+  }
+}

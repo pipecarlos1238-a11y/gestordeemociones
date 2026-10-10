@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Detector y Recolector de Emociones</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin: 0;
+            padding: 20px;
+        }
+        .container {
+            position: relative;
+            width: 640px;
+            height: 480px;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        video, canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 640px;
+            height: 480px;
+            transform: scaleX(-1);
+        }
+        .dashboard {
+            margin-top: 20px;
+            background: #1e1e1e;
+            padding: 20px;
+            border-radius: 10px;
+            width: 640px;
+            box-sizing: border-box;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        }
+        .metricas {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px 10px;
+            font-size: 0.85em;
+            color: #aaa;
+        }
+        .emocion-detectada {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #00e676;
+            text-align: center;
+            margin-bottom: 20px;
+        }
+        .controles {
+            margin-top: 20px;
+            padding-top: 15px;
+            border-top: 1px solid #333;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        select, button {
+            padding: 10px;
+            border-radius: 5px;
+            border: none;
+            font-size: 1em;
+            cursor: pointer;
+        }
+        select { background: #333; color: white; outline: none; }
+        button.grabar { background: #d32f2f; color: white; font-weight: bold; }
+        button.grabar.activo { background: #f44336; animation: pulse 1.5s infinite; }
+        button.descargar { background: #1976d2; color: white; display: none; }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+    </style>
+</head>
+<body>
+
+    <h2>Analizador Facial de Emociones (Labios + Cejas)</h2>
+    
+    <div class="container">
+        <video id="webcam" autoplay playsinline></video>
+        <canvas id="output_canvas" width="640" height="480"></canvas>
+    </div>
+
+    <div class="dashboard">
+        <div class="emocion-detectada" id="texto-emocion">Cargando modelo...</div>
+        
+        <div class="metricas">
+            <div>Curva Sonrisa: <span id="val_curva" style="color: white;">0.0000</span></div>
+            <div>Tensión Labial: <span id="val_tension" style="color: white;">0.0000</span></div>
+            <div>Ap. Interna: <span id="val_int" style="color: white;">0.0000</span></div>
+            <div>Ap. Externa: <span id="val_ext" style="color: white;">0.0000</span></div>
+            <div>Dist. Cejas (Enojo): <span id="val_dist_cejas" style="color: white;">0.0000</span></div>
+            <div>Alt. Cejas (Sorpresa): <span id="val_alt_cejas" style="color: white;">0.0000</span></div>
+        </div>
+
+        <div class="controles">
+            <select id="selector-emocion">
+                <option value="0">0 - Neutro</option>
+                <option value="1">1 - Felicidad</option>
+                <option value="2">2 - Tristeza</option>
+                <option value="3">3 - Enojo</option>
+                <option value="4">4 - Sorpresa</option>
+            </select>
+            <button id="btn-grabar" class="grabar">Iniciar Captura Automática</button>
+            <button id="btn-descargar" class="descargar">Descargar Dataset (0)</button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { FaceLandmarker, FilesetResolver } from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0";
+
+        const video = document.getElementById("webcam");
+        const canvasElement = document.getElementById("output_canvas");
+        const canvasCtx = canvasElement.getContext("2d");
+        
+        let faceLandmarker;
+        let lastVideoTime = -1;
+        let recolectando = false;
+        let dataset = [];
+        const btnGrabar = document.getElementById("btn-grabar");
+        const btnDescargar = document.getElementById("btn-descargar");
+        const selectorEmocion = document.getElementById("selector-emocion");
+
+        function calcularDistancia(p1, p2) {
+            return Math.hypot(p2.x - p1.x, p2.y - p1.y);
+        }
+
+        async function initializeFaceLandmarker() {
+            const filesetResolver = await FilesetResolver.forVisionTasks(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
+            );
+            
+            faceLandmarker = await FaceLandmarker.createFromOptions(filesetResolver, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+                    delegate: "GPU"
+                },
+                outputFaceBlendshapes: false,
+                runningMode: "VIDEO",
+                numFaces: 1
+            });
+
+            navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } }).then((stream) => {
+                video.srcObject = stream;
+                video.addEventListener("loadeddata", predictWebcam);
+            });
+        }
+
+        function predictWebcam() {
+            if (lastVideoTime !== video.currentTime) {
+                lastVideoTime = video.currentTime;
+                const results = faceLandmarker.detectForVideo(video, performance.now());
+                
+                canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+                if (results.faceLandmarks.length > 0) {
+                    const landmarks = results.faceLandmarks[0];
+                    const w = canvasElement.width;
+                    const h = canvasElement.height;
+                    const get_p = (idx) => ({ x: landmarks[idx].x * w, y: landmarks[idx].y * h });
+
+                    const ext_izq = get_p(61), ext_der = get_p(291);
+                    const ext_sup = get_p(0), ext_inf = get_p(17);
+                    const int_izq = get_p(78), int_der = get_p(308);
+                    const int_sup = get_p(13), int_inf = get_p(14);
+                    
+                    const ojo_izq_ext = get_p(33), ojo_der_ext = get_p(263);
+                    const distancia_ojos = calcularDistancia(ojo_izq_ext, ojo_der_ext);
+
+                    const ceja_izq_int = get_p(105), ceja_der_int = get_p(334);
+                    const ojo_izq_sup = get_p(159), ojo_der_sup = get_p(386);
+
+                    if (distancia_ojos > 0) {
+                        const ancho_boca = calcularDistancia(ext_izq, ext_der);
+                        const ancho_norm = ancho_boca / distancia_ojos;
+                        const alto_ext = calcularDistancia(ext_sup, ext_inf);
+                        const mar_externo = ancho_boca > 0 ? alto_ext / ancho_boca : 0;
+                        const ancho_int = calcularDistancia(int_izq, int_der);
+                        const alto_int = calcularDistancia(int_sup, int_inf);
+                        const mar_interno = ancho_int > 0 ? alto_int / ancho_int : 0;
+                        const centro_y = (ext_sup.y + ext_inf.y) / 2;
+                        const comisuras_y = (ext_izq.y + ext_der.y) / 2;
+                        const curva_sonrisa = (centro_y - comisuras_y) / distancia_ojos;
+                        const grosor_sup = calcularDistancia(ext_sup, int_sup);
+                        const grosor_inf = calcularDistancia(int_inf, ext_inf);
+                        const tension_labial = ancho_boca > 0 ? (grosor_sup + grosor_inf) / ancho_boca : 0;
+
+                        const dist_cejas = calcularDistancia(ceja_izq_int, ceja_der_int) / distancia_ojos;
+                        const alt_ceja_izq = calcularDistancia(ojo_izq_sup, ceja_izq_int);
+                        const alt_ceja_der = calcularDistancia(ojo_der_sup, ceja_der_int);
+                        const altura_cejas = ((alt_ceja_izq + alt_ceja_der) / 2) / distancia_ojos;
+
+                        document.getElementById("val_curva").innerText = curva_sonrisa.toFixed(4);
+                        document.getElementById("val_tension").innerText = tension_labial.toFixed(4);
+                        document.getElementById("val_int").innerText = mar_interno.toFixed(4);
+                        document.getElementById("val_ext").innerText = mar_externo.toFixed(4);
+                        document.getElementById("val_dist_cejas").innerText = dist_cejas.toFixed(4);
+                        document.getElementById("val_alt_cejas").innerText = altura_cejas.toFixed(4);
+
+                        // Lógica visual para la interfaz
+                        // Lógica visual para la interfaz
+                        let emocion = "Neutro 😐";
+                        let color = "#b0bec5";
+
+                        if (curva_sonrisa > 0.035) {
+                            emocion = "Felicidad 😊"; color = "#00e676";
+                        } else if (mar_interno > 0.12 && altura_cejas > 0.26) {
+                            emocion = "Sorpresa 😲"; color = "#ffea00";
+                        } else if (dist_cejas < 0.92) { // 👈 Umbral suavizado para tu rostro
+                            emocion = "Enojo 😠"; color = "#ff1744";
+                        } else if (curva_sonrisa < -0.012) { // 👈 Simplificado solo a la boca
+                            emocion = "Tristeza 😢"; color = "#29b6f6";
+                        }
+
+                        const textoElement = document.getElementById("texto-emocion");
+                        textoElement.innerText = emocion;
+                        textoElement.style.color = color;
+
+                        // Puntos en pantalla
+                        // Puntos en pantalla (Estrictamente Boca y Cejas)
+                        canvasCtx.fillStyle = color;
+                        [
+                            ext_izq, ext_der, ext_sup, ext_inf, // Exterior de la boca
+                            int_izq, int_der, int_sup, int_inf, // Interior de la boca
+                            ceja_izq_int, ceja_der_int          // Cejas internas
+                        ].forEach(p => {
+                            canvasCtx.beginPath();
+                            canvasCtx.arc(p.x, p.y, 3, 0, 2 * Math.PI);
+                            canvasCtx.fill();
+                        });
+
+                        // Lógica de recolección para el dataset
+                        if (recolectando) {
+                            const label = selectorEmocion.value;
+                            dataset.push([
+                                ancho_norm, mar_externo, mar_interno, 
+                                curva_sonrisa, tension_labial, 
+                                dist_cejas, altura_cejas, 
+                                label
+                            ]);
+                            
+                            btnDescargar.style.display = "block";
+                            btnDescargar.innerText = `Descargar Dataset (${dataset.length})`;
+                        }
+                    }
+                } else {
+                    document.getElementById("texto-emocion").innerText = "Rostro no detectado";
+                    document.getElementById("texto-emocion").style.color = "#ff5252";
+                }
+            }
+            window.requestAnimationFrame(predictWebcam);
+        }
+
+        initializeFaceLandmarker();
+
+        btnGrabar.addEventListener("click", () => {
+            recolectando = !recolectando;
+            if (recolectando) {
+                btnGrabar.innerText = "Detener Captura";
+                btnGrabar.classList.add("activo");
+                selectorEmocion.disabled = true; 
+            } else {
+                btnGrabar.innerText = "Iniciar Captura Automática";
+                btnGrabar.classList.remove("activo");
+                selectorEmocion.disabled = false;
+            }
+        });
+
+        btnDescargar.addEventListener("click", () => {
+            if (dataset.length === 0) return;
+            
+            let csvContent = "data:text/csv;charset=utf-8,";
+            csvContent += "ancho_norm,mar_externo,mar_interno,curva_sonrisa,tension_labial,dist_cejas,altura_cejas,label\n";
+            
+            dataset.forEach(row => {
+                csvContent += row.map(v => typeof v === 'number' ? v.toFixed(6) : v).join(",") + "\n";
+            });
+
+            const encodedUri = encodeURI(csvContent);
+            const link = document.createElement("a");
+            link.setAttribute("href", encodedUri);
+            
+            const timestamp = new Date().toISOString().replace(/[-:T]/g, "").slice(0, 14);
+            link.setAttribute("download", `dataset_avanzado_${timestamp}.csv`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            
+            dataset = [];
+            btnDescargar.innerText = "Descargar Dataset (0)";
+            btnDescargar.style.display = "none";
+        });
+
+    </script>
+</body>
+</html>

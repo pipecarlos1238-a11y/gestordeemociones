@@ -1,0 +1,23 @@
+{
+  "timestamp": "20260430_141039",
+  "muestras_por_clase": {
+    "Neutro": 1,
+    "Felicidad": 1,
+    "Tristeza": 1,
+    "Enojo": 1,
+    "Sorpresa": 0
+  },
+  "features": [
+    "ancho_norm",
+    "alto_norm",
+    "mar",
+    "sonrisa_norm"
+  ],
+  "labels": {
+    "0": "Neutro",
+    "1": "Felicidad",
+    "2": "Tristeza",
+    "3": "Enojo",
+    "4": "Sorpresa"
+  }
+}
